@@ -1,0 +1,36 @@
+{
+  "sheet_id": 0,
+  "sheet_name": "Hoja 1",
+  "last_row": 999,
+  "course_title": "Ley Orgánica para la Igualdad Laboral entre Mujeres y Hombres",
+  "expected_students": 489,
+  "students_url": "https://eduqairos.com/admin/estudiantes",
+  "delay_seconds": 1,
+  "timeout_ms": 20000,
+  "login_timeout_ms": 300000,
+  "login_ready": {"by": "text", "value": "Cerrar Sesión"},
+  "identity_mode": "email",
+  "selectors": {
+    "search": {
+      "by": "role",
+      "value": "textbox",
+      "name": "Buscar estudiantes por nombre",
+      "exact": false
+    },
+    "student_row": "div.divide-y > div.flex.flex-col.gap-3.py-3",
+    "row_name": ":scope > div.min-w-0 > p.font-medium.text-foreground",
+    "view": {
+      "by": "role",
+      "value": "button",
+      "name": "Ver"
+    },
+    "detail": "div[role='dialog'][data-state='open']",
+    "detail_name": "h2",
+    "course": "div.space-y-2.p-3:has([role=\"progressbar\"])",
+    "course_title": "p.text-sm.text-foreground",
+    "course_percentage": "span.w-10.text-right.text-xs.font-medium",
+    "row_email": ":scope > div.min-w-0 > p.break-all"
+  },
+  "authorized": false,
+  "spreadsheet_id": "TU_SPREADSHEET_ID"
+}
