@@ -20,3 +20,4 @@ seguimiento_global.version-*.py
 *.bak
 *.log
 *.har
+.eduqairos-state/

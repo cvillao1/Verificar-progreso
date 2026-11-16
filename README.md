@@ -16,6 +16,7 @@ README.md                   Esta guía
 .gitignore                  Exclusiones de archivos locales
 test_global.py              Pruebas de selección, datos y escritura acotada
 test_global_ui.py           Prueba de navegador con páginas simuladas
+test_recovery.py            Pruebas de guardado parcial y reanudación
 ```
 
 En esta distribución `seguimiento_global.py` contiene las funciones auxiliares y no requiere `seguimiento.py`. La versión anterior de trabajo sí lo importaba; no borres `seguimiento.py` de una instalación antigua mientras siga usando aquella versión.
@@ -49,6 +50,7 @@ Edita `config_global.json`, no el archivo de ejemplo:
 - `course_title`: título exacto del curso.
 - `delay_seconds`: duración de cada pausa, actualmente 1 segundo. El flujo habitual recarga la página para cada alumno y conserva ambas pausas.
 - `login_timeout_ms`: tiempo para iniciar sesión, por defecto 300000 milisegundos (5 minutos).
+- `google_timeout_seconds`: espera de red por defecto de 30 segundos para las llamadas a Google. Si falla el envío, se conserva la recuperación local; puedes repetir el comando cuando vuelva la conexión.
 - `login_ready`: control visible que indica sesión iniciada; por defecto, el texto exacto `Cerrar Sesión` observado en el sitio. No pulsa ese control.
 - `selectors`: controles de la interfaz. La plantilla contiene los observados en la instalación original; pueden necesitar ajustes si cambia la plataforma.
 
@@ -88,25 +90,53 @@ Ejemplo para comenzar desde otra fila:
 
 `--from-row` es un número de fila de Sheets, no un porcentaje, contador de alumnos ni fila de un archivo Excel distinto. No se configura en el código ni en `last_row`. Sin esa opción, `all` revisa todo el listado. Solo puede combinarse con `all`.
 
-La selección es por posición, **no omite automáticamente los 100% dentro del tramo**. Si vuelves a ordenar, comprueba dónde comienzan los pendientes y cambia ese número. El modo experimental `pending` no forma parte de esta versión. Para simular el tramo, quita `--write`.
+Al iniciar una actualización nueva, la selección es por posición, **no omite automáticamente los 100% dentro del tramo**. Si vuelves a ordenar después de completar el lote, comprueba dónde comienzan los pendientes antes de elegir ese número para un lote nuevo. Si hay un lote interrumpido, se conserva su selección por alumno para reanudarlo. El modo experimental `pending` no forma parte de esta versión. Para simular el tramo, quita `--write`.
 
 ## Durante la ejecución
 
 Mantén el equipo encendido y las ventanas abiertas. No edites ni ordenes la hoja mientras consulta. Al terminar, vuelve a comprobar A–C y L y aplica los resultados del lote en una actualización. Existe una pequeña ventana entre la comprobación final y la escritura: evita cambios concurrentes.
 
-Los resultados se guardan **al finalizar el lote**, no alumno por alumno. Si se detiene antes de escribir, los nuevos resultados de ese intento no se conservan ni se reanudan automáticamente. Si falla durante o después del envío, revisa L antes de repetir: la actualización puede haberse aplicado.
+Cada porcentaje leído correctamente se guarda inmediatamente en un archivo local de recuperación. Al completar el lote se escriben los porcentajes en L. Si ocurre un error antes de terminar, intenta escribir en L todos los resultados correctos que tenga pendientes. Si la conexión con Google falla, quedan guardados localmente y se comprobarán y enviarán al repetir el comando.
+
+## Errores, guardado parcial y reanudación automática
+
+No necesitas recordar la última fila ni cambiar el comando después de un fallo. Ejemplo:
+
+```powershell
+.\.venv\Scripts\python.exe seguimiento_global.py all --from-row 246 --write
+```
+
+Si falla al consultar un alumno:
+
+1. Los porcentajes anteriores que se leyeron correctamente quedan guardados localmente y se intenta escribirlos en L antes de salir.
+2. Si el error es de nombre o correo, revisa y corrige el dato contra la cuenta correcta; no se acepta una cuenta por parecido ni se asigna 0% al error.
+3. Si se perdió la conexión, espera a recuperarla.
+4. Ejecuta nuevamente el mismo comando desde la misma carpeta. Autoriza Google e inicia sesión cuando corresponda; no se guardan sesiones.
+5. Primero recupera los porcentajes pendientes de enviar a Sheets y luego retoma el primer alumno que no tiene una lectura válida guardada. No vuelve a consultar a los ya leídos correctamente.
+
+El archivo `.eduqairos-state/avance.json` conserva la selección original y los resultados mientras la ejecución está incompleta. Al terminar y confirmar todos, la siguiente ejecución inicia una actualización nueva del tramo solicitado. Sin `--write`, la simulación no crea ni modifica este archivo y no publica resultados.
+
+**Conserva esa carpeta local para poder reanudar y no la subas a GitHub.** Guarda huellas de identificación con una sal aleatoria, porcentajes, valores anteriores de L, referencias de fila y estado de envío. No almacena nombres, correos, cédulas, contraseñas ni tokens en texto. `.gitignore` la excluye. Las huellas son para vincular el avance; no equivalen a una copia de seguridad de toda la hoja.
+
+La reanudación localiza los mismos alumnos por la huella de su cédula aunque se haya ordenado la hoja entre ejecuciones. Si cambia el nombre o correo de una lectura guardada, descarta esa lectura como reutilizable y vuelve a consultar esa cuenta con sus datos actuales. Si desaparece un alumno o cambia su cédula, se detiene para revisar la correspondencia. Si cambia el curso o la hoja, no mezcla sus resultados con una ejecución incompleta de otro destino.
+
+Mientras hay una ejecución pendiente, conserva su `--from-row` original; también puedes omitir esa opción para reanudar automáticamente la selección pendiente. Indicar otro inicio distinto se rechaza para evitar perder avance sin darte cuenta. El tramo guardado mantiene sus alumnos originales aunque sus filas cambien; una actualización posterior completa puede incorporar un listado nuevo.
+
+Si la escritura se aplicó pero se perdió su respuesta, en el siguiente intento compara L con el resultado local y confirma lo ya aplicado sin volver a consultar al alumno. Si L contiene un valor diferente del leído al comenzar y del resultado nuevo, se detiene sin sobrescribirlo. Mantén las filas completas juntas cuando ordenes; no ordenes una sola columna de forma aislada.
+
+Una cancelación con Ctrl+C intenta guardar los resultados correctos. Si se cierra el equipo o se fuerza la terminación del programa, no puede subirlos en ese momento; los ya guardados localmente quedan para la próxima ejecución. Una segunda ejecución simultánea se bloquea para que no corrompa el archivo. No borres ni edites el archivo de recuperación para resolver un error sin revisar antes lo pendiente.
 
 `--pause-on-error` mantiene el navegador abierto para ver la ficha. La terminal muestra el paso del fallo; pulsa Enter cuando termines de revisarlo para cerrar y obtener el mensaje final. No hay reintentos automáticos. La pausa de un segundo puede aumentarse si el sitio o la red necesitan más tiempo; no hay consultas paralelas.
 
 ## Preparar el repositorio
 
-Publica esta carpeta limpia, no la instalación completa de Downloads. No subas `client_secret.json`, `config_global.json`, `config.json`, respaldos de configuración, `.venv`, sesiones, capturas ni listas de alumnos. `.gitignore` excluye los archivos locales más comunes. Los únicos JSON del repositorio deben ser plantillas revisadas sin secretos o información privada.
+Publica esta carpeta limpia, no la instalación completa de Downloads. No subas `client_secret.json`, `config_global.json`, `config.json`, `.eduqairos-state`, respaldos de configuración, `.venv`, sesiones, capturas ni listas de alumnos. `.gitignore` excluye los archivos locales más comunes. Los únicos JSON del repositorio deben ser plantillas revisadas sin secretos o información privada.
 
 Puedes preparar los archivos con una lista explícita:
 
 ```powershell
 git init
-git add .gitignore README.md requirements.txt config_global.example.json seguimiento_global.py test_global.py test_global_ui.py
+git add .gitignore README.md requirements.txt config_global.example.json seguimiento_global.py test_global.py test_global_ui.py test_recovery.py
 git status --short
 ```
 
@@ -116,7 +146,8 @@ Revisa los nombres antes de crear un commit o publicar. Si un archivo privado ya
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest -v test_global.py
+.\.venv\Scripts\python.exe -m unittest -v test_recovery.py
 .\.venv\Scripts\python.exe -m unittest -v test_global_ui.py
 ```
 
-La segunda prueba necesita Chromium y usa páginas simuladas con datos ficticios. Las pruebas no consultan el sitio ni Google Sheets y no se ejecutan durante una actualización normal. Revisa muestras de resultados al configurar la instalación o si cambia la interfaz.
+`test_global_ui.py` necesita Chromium y usa páginas simuladas con datos ficticios. Las pruebas de recuperación simulan fallos de nombres, desconexiones, respuestas perdidas al escribir, cambios de orden y cancelaciones. Las pruebas no consultan el sitio ni Google Sheets y no se ejecutan durante una actualización normal. Revisa muestras de resultados al configurar la instalación o si cambia la interfaz.

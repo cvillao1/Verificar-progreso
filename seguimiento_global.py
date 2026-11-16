@@ -1,11 +1,14 @@
 """Seguimiento global por interfaz administrativa. Destino exclusivo: columna L."""
 import argparse
+import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import time
 from pathlib import Path
+from contextlib import contextmanager, nullcontext
 
 class StopRun(Exception):
     pass
@@ -40,6 +43,177 @@ HEADER = "PROGRESO GLOBAL EDUQAIROS"
 CONFIG = Path("config_global.json")
 URL = "https://eduqairos.com/admin/estudiantes"
 LAST_STEP = "inicio"
+STATE_PATH = Path(".eduqairos-state/avance.json")
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def state_lock(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(".lock").open("a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise StopRun("Ya hay otra ejecución usando el archivo de recuperación. Cierra esa ejecución antes de continuar.") from None
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+class Progress:
+    """Registro local atómico. Sin identificaciones personales ni credenciales en texto."""
+    def __init__(self, path, cfg, identities, first_row=None):
+        self.path = Path(path)
+        scope = digest([cfg["spreadsheet_id"], cfg["sheet_id"], norm(cfg["course_title"]), URL])
+        previous = None
+        if self.path.exists():
+            try:
+                previous = json.loads(self.path.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                raise StopRun("No se pudo leer el archivo de recuperación. Consérvalo para revisarlo; no se reemplazó.") from None
+            require(isinstance(previous, dict) and previous.get("version") == 1
+                    and type(previous.get("complete")) is bool, "Archivo de recuperación no reconocido; no se reemplazó.")
+        self.resumed = bool(previous and not previous["complete"])
+        if self.resumed:
+            require(previous.get("scope") == scope, "Hay una ejecución pendiente para otra hoja o curso. Conserva su archivo de recuperación.")
+            require(first_row is None or previous.get("first_row") == first_row,
+                    "Hay una ejecución pendiente con otro inicio. Repite el comando anterior o usa all --write sin --from-row para reanudarla.")
+            self.data = previous
+            self.validate_file()
+        else:
+            start = first_row if first_row is not None else 2
+            selected = select_from_row(identities, start, cfg["last_row"])
+            self.data = {"version":1, "scope":scope, "salt":secrets.token_hex(16),
+                         "first_row":start, "queue":[], "results":{}, "complete":False}
+            self.data["queue"] = [self.key(identities[r]) for r in selected]
+            self.save()
+        self.mapping(identities)
+
+    def validate_file(self):
+        d = self.data
+        valid_key = lambda k: isinstance(k,str) and re.fullmatch(r"[0-9a-f]{64}",k) is not None
+        require(isinstance(d.get("salt"),str) and re.fullmatch(r"[0-9a-f]{32}",d["salt"]) is not None
+                and isinstance(d.get("queue"),list) and d["queue"] and all(valid_key(k) for k in d["queue"])
+                and len(set(d["queue"])) == len(d["queue"]) and isinstance(d.get("results"),dict),
+                "Estructura del archivo de recuperación inválida.")
+        for key,result in d["results"].items():
+            require(key in d["queue"] and isinstance(result,dict) and valid_key(result.get("identity"))
+                    and type(result.get("value")) in {int,float} and 0 <= result["value"] <= 1
+                    and type(result.get("applied")) is bool and isinstance(result.get("before"),dict),
+                    "Resultado local inválido; no se enviará a Sheets.")
+            before = result["before"]
+            require(not before or (set(before) == {"numberValue"} and type(before["numberValue"]) in {int,float}
+                                   and 0 <= before["numberValue"] <= 1), "Valor anterior de recuperación inválido.")
+
+    def key(self, identity):
+        return digest([self.data["salt"], identity["cedula"]])
+
+    def fingerprint(self, identity):
+        return digest([self.data["salt"], identity["cedula"], identity["name"], identity["email"]])
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(self.data, handle, ensure_ascii=False, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, self.path)
+
+    def mapping(self, identities):
+        rows = {self.key(identity):row for row,identity in identities.items()}
+        require(all(key in rows for key in self.data["queue"]),
+                "Falta un alumno de la ejecución pendiente o cambió su cédula. Revisa la correspondencia antes de reanudar.")
+        changed = False
+        for key,result in list(self.data["results"].items()):
+            row = rows[key]
+            if result["identity"] != self.fingerprint(identities[row]):
+                print(f"Fila {row}: cambió el nombre o correo; se consultará de nuevo y no se reutilizará el porcentaje anterior.")
+                del self.data["results"][key]
+                changed = True
+        if changed:
+            self.save()
+        return rows
+
+    def remaining(self, identities):
+        rows = self.mapping(identities)
+        return [rows[key] for key in self.data["queue"] if key not in self.data["results"]]
+
+    def record(self, row, value, identity, before):
+        require(type(value) in {int,float} and 0 <= value <= 1, "Porcentaje inválido; no se guardó localmente.")
+        key = self.key(identity)
+        require(key in self.data["queue"], "Alumno fuera de la selección original.")
+        self.data["results"][key] = {"value":value, "identity":self.fingerprint(identity),
+                                     "before":before, "row_hint":row, "applied":False}
+        self.save()
+
+    def flush(self, sheet):
+        pending = [k for k,v in self.data["results"].items() if not v["applied"]]
+        if not pending:
+            return 0
+        identities = sheet.identities()
+        rows = self.mapping(identities)
+        pending = [k for k,v in self.data["results"].items() if not v["applied"]]
+        if not pending:
+            return 0
+        before = sheet.snapshot([rows[k] for k in pending])
+        require(before.get(1,{}) in ({},{"stringValue":HEADER}), "Cambió el encabezado L; se conservaron los resultados locales.")
+        requests = []
+        for key in pending:
+            result, row = self.data["results"][key], rows[key]
+            expected = {"numberValue":result["value"]}
+            current = before.get(row,{})
+            # Una escritura pudo aplicarse aunque se perdiera la respuesta de Google.
+            require(current == result["before"] or current == expected,
+                    f"L{row} fue editada después de leerla. Los resultados están guardados localmente; no se sobrescribió ese dato.")
+            if current != expected:
+                requests.append(sheet.request(row,expected,True))
+        if requests or before.get(1) != {"stringValue":HEADER}:
+            sheet.write([sheet.request(1,{"stringValue":HEADER})] + requests)
+        after = sheet.snapshot([rows[k] for k in pending])
+        confirmed = []
+        for key in pending:
+            value = self.data["results"][key]["value"]
+            if after.get(rows[key]) == {"numberValue":value}:
+                confirmed.append(key)
+        for key in confirmed:
+            self.data["results"][key]["applied"] = True
+        self.save()
+        require(after.get(1) == {"stringValue":HEADER} and len(confirmed) == len(pending),
+                "No se confirmó toda la escritura; se conservaron los resultados para comprobarlos en la próxima ejecución.")
+        print(f"Guardados y verificados {len(confirmed)} resultados en L. Recuperación local actualizada.")
+        return len(confirmed)
+
+    def finish(self):
+        require(len(self.data["results"]) == len(self.data["queue"])
+                and all(r["applied"] for r in self.data["results"].values()), "Quedan alumnos o escrituras pendientes; se conservará la recuperación.")
+        self.data["complete"] = True
+        self.save()
+
+
+def show_error(error):
+    if isinstance(error,StopRun):
+        print(f"DETENIDO: {error}")
+    else:
+        print(f"DETENIDO ({type(error).__name__}). Paso: {LAST_STEP}.")
 
 
 def stage(label):
@@ -121,7 +295,7 @@ def init_config():
     cfg = json.loads(template.read_text(encoding="utf-8-sig"))
     with CONFIG.open("x", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
-    print("Creado config_global.json. Configura el ID de la hoja, autorización y filas piloto antes de ejecutar.")
+    print("Creado config_global.json. Configura el ID de la hoja y la autorización antes de ejecutar.")
 
 
 def locate(scope, spec):
@@ -153,6 +327,8 @@ class GlobalSheet(Sheet):
     def __init__(self, cfg):
         from google_auth_oauthlib.flow import InstalledAppFlow
         from googleapiclient.discovery import build
+        from google_auth_httplib2 import AuthorizedHttp
+        import httplib2
         require(isinstance(cfg["spreadsheet_id"], str) and bool(re.fullmatch(r"[A-Za-z0-9_-]+", cfg["spreadsheet_id"]))
                 and cfg["spreadsheet_id"] != "TU_SPREADSHEET_ID"
                 and type(cfg["sheet_id"]) is int and cfg["sheet_id"] >= 0
@@ -161,8 +337,11 @@ class GlobalSheet(Sheet):
         flow = InstalledAppFlow.from_client_secrets_file("client_secret.json", [
             "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.metadata.readonly"])
         credentials = flow.run_local_server(port=0, access_type="online")
-        self.api = build("sheets", "v4", credentials=credentials, cache_discovery=False)
-        drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
+        timeout = cfg.get("google_timeout_seconds",30)
+        require(type(timeout) in {int,float} and 0 < timeout <= 300, "google_timeout_seconds debe estar entre 0 y 300 segundos.")
+        transport = AuthorizedHttp(credentials,http=httplib2.Http(timeout=timeout))
+        self.api = build("sheets", "v4", http=transport, cache_discovery=False)
+        drive = build("drive", "v3", http=transport, cache_discovery=False)
         self.c, self.sid = cfg, cfg["spreadsheet_id"]
         permissions = drive.files().get(fileId=self.sid, fields="capabilities(canEdit)", supportsAllDrives=True).execute()
         require(permissions.get("capabilities", {}).get("canEdit") is True, "La cuenta de Google no puede editar.")
@@ -268,11 +447,13 @@ def wait_for_login(page, cfg):
     locate(page, ready).wait_for(state="visible", timeout=cfg.get("login_timeout_ms",300000))
 
 
-def consult_rows(page, cfg, identities, selected):
+def consult_rows(page, cfg, identities, selected, on_result=None):
     results = {}
     for index, row in enumerate(selected):
         print(f"Consultando fila {row}: {index+1}/{len(selected)}.")
         results[row] = read_global(page,cfg,identities[row])
+        if on_result is not None:
+            on_result(row,results[row])
         time.sleep(cfg["delay_seconds"])
     return results
 
@@ -322,6 +503,66 @@ def read_global(page, cfg, identity):
     return parse_percentage(unique(control, "porcentaje del curso").inner_text())
 
 
+def run_update(args, cfg, sheet, identities):
+    journal = Progress(STATE_PATH,cfg,identities,args.from_row) if args.write else None
+    if journal is not None:
+        if journal.resumed:
+            print("Se encontró una ejecución interrumpida. Recuperando resultados antes de consultar alumnos nuevos.")
+            try:
+                journal.flush(sheet)
+            except (Exception,KeyboardInterrupt):
+                print("No se completó la recuperación en Sheets. Los porcentajes siguen en .eduqairos-state; repite el comando cuando resuelvas la conexión o el conflicto.")
+                raise
+            identities = sheet.identities()
+        selected = journal.remaining(identities)
+        if not selected:
+            journal.finish()
+            print("La ejecución pendiente quedó completada y verificada. No fue necesario abrir EduQairos.")
+            return
+        print(f"Pendientes en esta ejecución: {len(selected)}. Siguiente alumno: fila {selected[0]}.")
+    else:
+        selected = select_from_row(identities,args.from_row if args.from_row is not None else 2,cfg["last_row"])
+    before = sheet.snapshot(selected)
+    require(sheet.identities() == identities, "El listado cambió al iniciar. Repite sin ordenar ni editar mientras se ejecuta.")
+    callback = (lambda row,value:journal.record(row,value,identities[row],before[row])) if journal else None
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        stage("abrir Chromium")
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context(accept_downloads=False)
+        try:
+            page = context.new_page()
+            page.set_default_timeout(cfg["timeout_ms"])
+            page.goto(URL)
+            wait_for_login(page,cfg)
+            results = consult_rows(page,cfg,identities,selected,on_result=callback)
+            if journal is not None:
+                stage("escribir y verificar exclusivamente la columna L")
+                journal.flush(sheet)
+                journal.finish()
+                print(f"Ejecución completada: {len(journal.data['queue'])} alumnos consultados y guardados en L.")
+            else:
+                print(f"Simulación completada: {len(results)} filas; no se escribió en Sheets ni se creó recuperación local.")
+        except (Exception,KeyboardInterrupt) as error:
+            failed_step = LAST_STEP
+            if journal is not None:
+                try:
+                    journal.flush(sheet)
+                except (Exception,KeyboardInterrupt) as save_error:
+                    label = str(save_error) if isinstance(save_error,StopRun) else type(save_error).__name__
+                    print(f"No se pudo confirmar el guardado parcial en Sheets ({label}). Los resultados siguen en el archivo local de recuperación.")
+                print("Repite el mismo comando: se reanudará sin repetir los alumnos ya leídos y conservados correctamente.")
+            stage(failed_step)
+            show_error(error)
+            if args.pause_on_error and isinstance(error,Exception):
+                print(f"Pausa de diagnóstico. Paso: {LAST_STEP}.")
+                input("El navegador queda abierto para revisar la ficha. Pulsa Enter cuando termines para cerrar. ")
+            raise
+        finally:
+            context.close()
+            browser.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["init-config","use-email","inspect","check-sheet","all"])
@@ -367,39 +608,8 @@ def main():
         sheet.snapshot(list(identities))
         print("L disponible, nombres, correos, cédulas y permiso de edición comprobados. No se modificó la hoja.")
         return
-    if args.from_row is not None:
-        selected = select_from_row(identities, args.from_row, cfg["last_row"])
-        print(f"Consulta limitada: {len(selected)} alumnos desde la fila {selected[0]} hasta la {selected[-1]}.")
-    else:
-        selected = sorted(identities)
-    before = sheet.snapshot(selected)
-    if args.write:
-        sheet.probe(selected[0], before)
-    from playwright.sync_api import sync_playwright
-    results = {}
-    with sync_playwright() as p:
-        stage("abrir Chromium")
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context(accept_downloads=False)
-        try:
-            page = context.new_page()
-            page.set_default_timeout(cfg["timeout_ms"])
-            page.goto(URL)
-            wait_for_login(page,cfg)
-            results = consult_rows(page,cfg,identities,selected)
-            if args.write:
-                stage("escribir y verificar exclusivamente la columna L")
-                sheet.commit(results,identities,before)
-            else:
-                print(f"Simulación completada: {len(results)} filas; no se escribió en Sheets.")
-        except Exception:
-            if args.pause_on_error:
-                print(f"Pausa de diagnóstico. Paso: {LAST_STEP}.")
-                input("El navegador queda abierto para revisar la ficha. Pulsa Enter cuando termines para cerrar. ")
-            raise
-        finally:
-            context.close()
-            browser.close()
+    with state_lock(STATE_PATH) if args.write else nullcontext():
+        run_update(args,cfg,sheet,identities)
 
 
 if __name__ == "__main__":
@@ -409,12 +619,12 @@ if __name__ == "__main__":
         print(f"DETENIDO: {exc}")
         sys.exit(1)
     except KeyboardInterrupt:
-        print("Cancelado. Si se interrumpió la escritura, revisa L antes de repetir.")
+        print("Cancelado. Si usaste --write, repite el comando para recuperar los resultados y continuar. Conserva .eduqairos-state.")
         sys.exit(130)
     except Exception as exc:
         print(f"DETENIDO ({type(exc).__name__}). No hay reintento automático.")
         print(f"Paso: {LAST_STEP}.")
         if LAST_STEP == "abrir Chromium":
             print("Comprueba Chromium: .\\.venv\\Scripts\\python.exe -m playwright install chromium")
-        print("Si falló durante la escritura, revisa L antes de repetir. No compartas URLs de autorización.")
+        print("Si usaste --write, conserva .eduqairos-state y repite el comando para recuperar el avance. No compartas URLs de autorización.")
         sys.exit(1)
