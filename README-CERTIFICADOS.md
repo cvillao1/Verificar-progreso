@@ -62,6 +62,8 @@ El inicio de sesión y los campos del perfil deben calibrarse con la interfaz re
 
 El OCR exige nombre y tipo de certificado reconocibles. Si falla por diseño, ortografía o calidad del PDF, se detiene para revisar; no acepta nombres parecidos ni inventa certificados. Necesita el OCR de Windows con un idioma instalado. Los PDF permanecen en el equipo.
 
+La búsqueda utiliza una palabra del nombre y prueba otras si hay coincidencias ajenas o incompletas. Prefiere palabras sin caracteres especiales para evitar fallos del buscador con la ñ. Después exige todos los nombres y apellidos completos, aunque aparezcan en otro orden. Esta comprobación también se aplica a los PDF y al perfil; no acepta apellidos distintos o faltantes. El ZIP conserva el nombre de la hoja.
+
 ## Interrupciones y recuperación
 
 Repite el mismo comando. Los ZIP terminados permanecen guardados y se omiten al continuar. El avance se conserva en `.certificados-state/progreso.json`, con identificadores y huellas, sin correos ni contraseñas. No borres esa carpeta mientras el lote esté pendiente.

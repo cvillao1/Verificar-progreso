@@ -43,6 +43,24 @@ def step(label):
     STEP = label
 
 
+def name_key(name):
+    return tuple(sorted(text_key(name).split()))
+
+
+def name_in_text(name,text):
+    words=text_key(text).split()
+    expected=name_key(name)
+    return any(tuple(sorted(words[i:i+len(expected)]))==expected
+               for i in range(len(words)-len(expected)+1))
+
+
+def search_terms(name):
+    # Una palabra completa encuentra las dos ordenaciones del nombre y evita
+    # depender de cómo el buscador trata la ñ. La identidad se exige completa.
+    words=list(dict.fromkeys(str(name).split()))
+    return sorted(words,key=lambda w:(not w.isascii(),-len(w)))
+
+
 def one(locator,label):
     require(locator.count() == 1 and locator.is_visible(),f'Control ausente o ambiguo: {label}.')
     return locator
@@ -97,7 +115,7 @@ def roster_records(rows):
             require(isinstance(password,str) and bool(password),'Falta contraseña institucional.')
             output=filename(name)
             for mapping,key,label in [(numbers,number,'número'),(ids,document,'cédula'),(emails,email,'correo'),
-                                      (names,text_key(name),'nombre'),(paths,output.casefold(),'nombre de archivo')]:
+                                      (names,name_key(name),'nombre'),(paths,output.casefold(),'nombre de archivo')]:
                 require(key not in mapping,f'{label} duplicado con la fila {mapping.get(key)}.')
                 mapping[key]=row
             records.append({'row':row,'number':number,'cedula':document,'name':name,'email':email,'password':password})
@@ -159,7 +177,7 @@ def inspect_pdf(content,expected_name,ocr=None):
         require(len(images)==1,'El PDF tiene una estructura de imagen diferente; revisar antes de aceptar.')
         text=(ocr or ocr_image)(images[0].image)
     normalized=text_key(text)
-    require(text_key(expected_name) in normalized,'El nombre reconocido en el certificado no coincide. Requiere revisión; no se aceptará por parecido.')
+    require(name_in_text(expected_name,text),'El nombre completo reconocido en el certificado no coincide. Se admite otro orden, pero no palabras faltantes o distintas.')
     found=[i for i,label in enumerate(LABELS) if text_key(label) in normalized]
     require(found,'No se pudo reconocer la lección o el curso del PDF.')
     # El título del módulo 5 contiene "Igualdad de Género"; elegir el más específico.
@@ -250,9 +268,12 @@ def admin_rows(page,cfg,record,expected_count=None):
     page.goto(ADMIN,wait_until='domcontentloaded')
     search=locate(page,cfg['selectors']['admin_search'])
     search.wait_for(state='visible')
-    one(search,'buscador de certificados').fill(record['name'])
-    expected_name=text_key(record['name'])
+    terms=iter(search_terms(record['name']))
+    query=next(terms)
+    one(search,'buscador de certificados').fill(query)
+    expected_name=name_key(record['name'])
     deadline=time.monotonic()+cfg['timeout_ms']/1000
+    query_deadline=time.monotonic()+min(6,cfg['timeout_ms']/1000)
     while time.monotonic()<deadline:
         rows=page.get_by_role('row').filter(has=page.get_by_role('button',name='Descargar',exact=True))
         visible=[row for row in rows.all() if row.is_visible()]
@@ -261,7 +282,7 @@ def admin_rows(page,cfg,record,expected_count=None):
             cells=row.get_by_role('cell')
             if cells.count()<5:
                 continue
-            if text_key(cells.nth(cfg['table']['name_index']).inner_text())!=expected_name:
+            if name_key(cells.nth(cfg['table']['name_index']).inner_text())!=expected_name:
                 continue
             title=text_key(cells.nth(cfg['table']['course_index']).inner_text())
             require(title==text_key(COURSE_TITLE) or title.startswith(text_key(COURSE_TITLE)+' '),
@@ -274,17 +295,23 @@ def admin_rows(page,cfg,record,expected_count=None):
         if info.count()==1:
             match=re.search(r'(\d+) certificados?.*Página\s+(\d+)\s+de\s+(\d+)',info.inner_text(),re.I)
             if match and int(match[1])==len(visible)==len(good) and int(match[2])==int(match[3])==1:
-                require(len(good) in {5,6},f'Número {record["number"]}: se encontraron {len(good)} certificados; requiere revisión.')
                 require(len(set(good))==len(good),'Identificadores de certificado duplicados.')
-                if expected_count is None or len(good)==expected_count:
+                if len(good) in {5,6} and (expected_count is None or len(good)==expected_count):
                     return good
                 # Tras emitir, la lista puede tardar en actualizarse en el servidor.
-                page.reload(wait_until='domcontentloaded')
-                search=locate(page,cfg['selectors']['admin_search'])
-                search.wait_for(state='visible')
-                one(search,'buscador de certificados').fill(record['name'])
+                if expected_count==6 and len(good)==5:
+                    page.reload(wait_until='domcontentloaded')
+                    search=locate(page,cfg['selectors']['admin_search'])
+                    search.wait_for(state='visible')
+                    one(search,'buscador de certificados').fill(query)
+        if time.monotonic()>=query_deadline:
+            query=next(terms,None)
+            if query is None:
+                break
+            one(search,'buscador de certificados').fill(query)
+            query_deadline=time.monotonic()+min(6,cfg['timeout_ms']/1000)
         page.wait_for_timeout(250)
-    raise StopRun('La búsqueda no devuelve una única lista completa del nombre exacto. Revisar controles, coincidencias y paginación.')
+    raise StopRun('No se encontró una lista completa de cinco o seis certificados del mismo nombre completo. Se probaron palabras del nombre; revisar coincidencias y paginación.')
 
 
 def download_bulk(page,path,count,cfg):
@@ -332,7 +359,7 @@ def generate_final(browser,cfg,record,ledger,download_path):
         one(profile,'Mi perfil').click()
         found_email=field_value(locate(page,cfg['selectors']['profile_email']),'correo del perfil')
         found_name=field_value(locate(page,cfg['selectors']['profile_name']),'nombre completo del perfil')
-        require(email_key(found_email)==record['email'] and text_key(found_name)==text_key(record['name']),
+        require(email_key(found_email)==record['email'] and name_key(found_name)==name_key(record['name']),
                 'El perfil del alumno no coincide con la fila de la hoja. No se emitió el certificado.')
         page.goto(COURSE,wait_until='domcontentloaded')
         step('comprobar 100% y cinco lecciones completas')

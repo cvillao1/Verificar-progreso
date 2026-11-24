@@ -84,6 +84,15 @@ class CertificateTests(unittest.TestCase):
         with patch('pypdf.PdfReader',return_value=Mock(is_encrypted=False,pages=[page])):
             self.assertEqual(c.inspect_pdf(b'%PDF-test',NAME,lambda _:NAME+' '+c.COURSE_TITLE),5)
 
+    def test_full_name_can_change_order_but_cannot_lose_words(self):
+        original='ALICIA BEATRIZ PEREZ MUÑOZ'
+        self.assertEqual(c.name_key(original),c.name_key('PEREZ MUÑOZ ALICIA BEATRIZ'))
+        self.assertTrue(c.name_in_text(original,'Otorgado a PEREZ MUÑOZ ALICIA BEATRIZ por participar'))
+        self.assertFalse(c.name_in_text(original,'ALICIA BEATRIZ PEREZ GOMEZ'))
+        self.assertFalse(c.name_in_text(original,'ALICIA BEATRIZ PEREZ'))
+        self.assertFalse(c.name_in_text(original,'ALICIA BEATRIZ OTRO PEREZ MUÑOZ'))
+        self.assertEqual(c.search_terms(original)[0],'BEATRIZ')
+
     def test_resume_survives_row_and_ordinal_sorting(self):
         ledger=self.ledger()
         ledger.set(record(),done=True)
@@ -212,6 +221,21 @@ class BrowserTests(unittest.TestCase):
                         self.assertEqual(emitted,[])
                         ledger.set.assert_not_called()
                 self.assertEqual(len(self.browser.contexts),browser_contexts_before)
+
+    def test_search_handles_enye_and_mixed_name_order(self):
+        name='ALICIA BEATRIZ PEREZ MUÑOZ'
+        page=self.browser.new_page()
+        names=[name]*5+['PEREZ MUÑOZ ALICIA BEATRIZ']
+        rows=''.join(f'<tr><td></td><td>CERT-{i}</td><td>{n}</td><td>{c.COURSE_TITLE}</td><td>fecha</td><td><button>Descargar</button></td></tr>' for i,n in enumerate(names))
+        html=f'''<input oninput="let ok=this.value==='BEATRIZ';document.querySelector('tbody').hidden=!ok;document.querySelector('p').hidden=!ok">
+        <table><tbody hidden>{rows}</tbody></table><p hidden>6 certificados · Página 1 de 1</p>'''
+        page.route('**/*',lambda route:route.fulfill(content_type='text/html; charset=utf-8',body=html))
+        cfg={'timeout_ms':1500,'selectors':{'admin_search':{'by':'role','value':'textbox'}},'table':{'name_index':2,'course_index':3,'id_index':1}}
+        try:
+            self.assertEqual(c.admin_rows(page,cfg,{**record(),'name':name}),list('012345'))
+            self.assertEqual(page.get_by_role('textbox').input_value(),'BEATRIZ')
+        finally:
+            page.close()
 
 
 if __name__=='__main__':
