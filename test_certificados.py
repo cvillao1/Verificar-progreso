@@ -84,6 +84,22 @@ class CertificateTests(unittest.TestCase):
         with patch('pypdf.PdfReader',return_value=Mock(is_encrypted=False,pages=[page])):
             self.assertEqual(c.inspect_pdf(b'%PDF-test',NAME,lambda _:NAME+' '+c.COURSE_TITLE),5)
 
+    def test_ocr_joined_words_keep_exact_title_letters(self):
+        joined=c.LABELS[2].replace(' de ','de ').replace('Empresa o','Empresao')
+        self.assertEqual(c.certificate_kinds(joined),[2])
+        self.assertEqual(c.certificate_kinds(c.LABELS[4].replace(' ','')),[4])
+        self.assertEqual(c.certificate_kinds(c.COURSE_TITLE.replace('Hombres','Hombree')),[])
+
+    def test_ocr_retries_enlarged_image_before_accepting_final(self):
+        image=Mock(width=100,height=80)
+        page=Mock(images=[Mock(image=image)])
+        page.extract_text.return_value=''
+        ocr=Mock(side_effect=[NAME+' '+c.COURSE_TITLE.replace('Hombres','Hombree'),NAME+' '+c.COURSE_TITLE])
+        with patch('pypdf.PdfReader',return_value=Mock(is_encrypted=False,pages=[page])):
+            self.assertEqual(c.inspect_pdf(b'%PDF-test',NAME,ocr),5)
+        self.assertEqual(ocr.call_count,2)
+        self.assertEqual(image.resize.call_args.args[0],(200,160))
+
     def test_full_name_can_change_order_but_cannot_lose_words(self):
         original='ALICIA BEATRIZ PEREZ MUÑOZ'
         self.assertEqual(c.name_key(original),c.name_key('PEREZ MUÑOZ ALICIA BEATRIZ'))

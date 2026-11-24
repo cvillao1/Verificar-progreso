@@ -174,21 +174,36 @@ def inspect_pdf(content,expected_name,ocr=None):
     require(not reader.is_encrypted and len(reader.pages)==1,'Se esperaba un certificado PDF de una página sin cifrado.')
     page=reader.pages[0]
     text=page.extract_text() or ''
+    image=None
     if not text.strip():
         images=list(page.images)
         require(len(images)==1,'El PDF tiene una estructura de imagen diferente; revisar antes de aceptar.')
-        text=(ocr or ocr_image)(images[0].image)
-    normalized=text_key(text)
+        image=images[0].image
+        text=(ocr or ocr_image)(image)
     require(name_in_text(expected_name,text),'El nombre completo reconocido en el certificado no coincide. Se admite otro orden, pero no palabras faltantes o distintas.')
-    found=[i for i,label in enumerate(LABELS) if text_key(label) in normalized]
+    found=certificate_kinds(text)
+    if not found and image is not None:
+        from PIL import Image
+        enlarged=image.resize((image.width*2,image.height*2),Image.Resampling.LANCZOS)
+        retry=(ocr or ocr_image)(enlarged)
+        # La lectura ampliada también debe reconocer la identidad completa.
+        require(name_in_text(expected_name,retry),'La segunda lectura no confirmó el nombre completo del certificado.')
+        found=certificate_kinds(retry)
     require(found,'No se pudo reconocer la lección o el curso del PDF.')
+    require(len(found)==1,'El PDF no identifica un único tipo de certificado.')
+    return found[0]
+
+
+def certificate_kinds(text):
+    # El OCR puede unir palabras: se conservan todas las letras del título.
+    compact=text_key(text).replace(' ','')
+    found=[i for i,label in enumerate(LABELS) if text_key(label).replace(' ','') in compact]
     # El título del módulo 5 contiene "Igualdad de Género"; elegir el más específico.
     if 4 in found and 1 in found:
         found.remove(1)
     if 5 in found and len(found)>1:
         found.remove(5)
-    require(len(found)==1,'El PDF no identifica un único tipo de certificado.')
-    return found[0]
+    return found
 
 
 def inspect_zip(path,name,expected_kinds,validator=inspect_pdf):
