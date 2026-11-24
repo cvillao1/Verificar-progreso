@@ -62,7 +62,7 @@ El inicio de sesión y los campos del perfil deben calibrarse con la interfaz re
 
 El OCR exige nombre y tipo de certificado reconocibles. Si falla por diseño, ortografía o calidad del PDF, se detiene para revisar; no acepta nombres parecidos ni inventa certificados. Necesita el OCR de Windows con un idioma instalado. Los PDF permanecen en el equipo.
 
-La búsqueda utiliza una palabra del nombre y prueba otras si hay coincidencias ajenas o incompletas. Prefiere palabras sin caracteres especiales para evitar fallos del buscador con la ñ. Después exige todos los nombres y apellidos completos, aunque aparezcan en otro orden. Esta comprobación también se aplica a los PDF y al perfil; no acepta apellidos distintos o faltantes. El ZIP conserva el nombre de la hoja.
+La búsqueda empieza por el nombre completo tal como aparece en la hoja. Solo si no obtiene una lista completa del alumno, prueba nombres o apellidos por separado, prefiriendo palabras sin caracteres especiales para evitar fallos del buscador con la ñ. Después exige todos los nombres y apellidos completos, aunque aparezcan en otro orden. Esta comprobación también se aplica a los PDF y al perfil; no acepta apellidos distintos o faltantes. El ZIP conserva el nombre de la hoja.
 
 ## Interrupciones y recuperación
 

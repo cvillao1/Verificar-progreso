@@ -91,7 +91,7 @@ class CertificateTests(unittest.TestCase):
         self.assertFalse(c.name_in_text(original,'ALICIA BEATRIZ PEREZ GOMEZ'))
         self.assertFalse(c.name_in_text(original,'ALICIA BEATRIZ PEREZ'))
         self.assertFalse(c.name_in_text(original,'ALICIA BEATRIZ OTRO PEREZ MUÑOZ'))
-        self.assertEqual(c.search_terms(original)[0],'BEATRIZ')
+        self.assertEqual(c.search_terms(original)[:2],[original,'BEATRIZ'])
 
     def test_resume_survives_row_and_ordinal_sorting(self):
         ledger=self.ledger()
@@ -166,6 +166,7 @@ class BrowserTests(unittest.TestCase):
         cfg={'timeout_ms':500,'download_timeout_ms':2000,'selectors':{'admin_search':{'by':'role','value':'textbox'}},'table':{'name_index':2,'course_index':3,'id_index':1}}
         try:
             self.assertEqual(c.admin_rows(page,cfg,record()),list('012345'))
+            self.assertEqual(page.get_by_role('textbox').input_value(),NAME)
             with tempfile.TemporaryDirectory() as folder:
                 target=Path(folder)/'test.zip'
                 c.download_bulk(page,target,6,cfg)

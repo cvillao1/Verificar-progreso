@@ -55,10 +55,11 @@ def name_in_text(name,text):
 
 
 def search_terms(name):
-    # Una palabra completa encuentra las dos ordenaciones del nombre y evita
-    # depender de cómo el buscador trata la ñ. La identidad se exige completa.
+    # Primero el nombre de la hoja. Si falla, una palabra permite encontrar
+    # las dos ordenaciones sin depender de cómo el buscador trata la ñ.
     words=list(dict.fromkeys(str(name).split()))
-    return sorted(words,key=lambda w:(not w.isascii(),-len(w)))
+    full=' '.join(str(name).split())
+    return list(dict.fromkeys([full]+sorted(words,key=lambda w:(not w.isascii(),-len(w)))))
 
 
 def one(locator,label):
@@ -273,7 +274,7 @@ def admin_rows(page,cfg,record,expected_count=None):
     one(search,'buscador de certificados').fill(query)
     expected_name=name_key(record['name'])
     deadline=time.monotonic()+cfg['timeout_ms']/1000
-    query_deadline=time.monotonic()+min(6,cfg['timeout_ms']/1000)
+    query_deadline=time.monotonic()+min(12,cfg['timeout_ms']/2000)
     while time.monotonic()<deadline:
         rows=page.get_by_role('row').filter(has=page.get_by_role('button',name='Descargar',exact=True))
         visible=[row for row in rows.all() if row.is_visible()]
