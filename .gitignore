@@ -21,3 +21,8 @@ seguimiento_global.version-*.py
 *.log
 *.har
 .eduqairos-state/
+config_certificados.json
+.certificados-state/
+.certificados-staging/
+*.zip
+*.pdf

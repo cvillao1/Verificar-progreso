@@ -1,5 +1,7 @@
 # Seguimiento global de EduQairos en Windows
 
+Para descargar los seis certificados por alumno desde el número 123, consulta [la guía de certificados](README-CERTIFICADOS.md). Es un programa separado que no modifica Sheets. Su distribución de columnas es A número, B cédula, C nombre, D correo y E contraseña; el seguimiento de porcentajes descrito abajo usa la distribución anterior.
+
 Consulta el porcentaje global de un curso desde la interfaz administrativa autorizada y lo guarda en Google Sheets. Busca cada cuenta por el correo de C y exige que coincidan el correo y el nombre de B. A conserva la cédula de la fila. Escribe solo en L, con encabezado `PROGRESO GLOBAL EDUQAIROS`; conserva F–J y la fórmula K.
 
 El programa no obtiene los estados individuales de las cinco lecciones ni los deduce del porcentaje o los certificados. No utiliza una API de EduQairos ni exporta cookies o tokens de sesión. Requiere inicio de sesión manual en cada ejecución y autorización para automatizar estas consultas.

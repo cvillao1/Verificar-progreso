@@ -1,0 +1,24 @@
+{
+  "authorized": false,
+  "allow_final_certificate": false,
+  "spreadsheet_id": "TU_SPREADSHEET_ID",
+  "sheet_id": 0,
+  "sheet_name": "Hoja 1",
+  "last_row": 999,
+  "expected_students": 489,
+  "start_number": 123,
+  "download_directory": "RODRIGO TRIVIÑO",
+  "timeout_ms": 60000,
+  "download_timeout_ms": 180000,
+  "delay_seconds": 1,
+  "table": {"id_index": 1, "name_index": 2, "course_index": 3},
+  "selectors": {
+    "admin_search": {"by": "role", "value": "textbox"},
+    "student_login_entry": {"by": "text", "value": "Iniciar sesión", "exact": false},
+    "student_email": "input[type='email']",
+    "student_password": "input[type='password']",
+    "student_login_submit": {"by": "role", "value": "button", "name": "Iniciar sesión", "exact": false},
+    "profile_email": "input[type='email']",
+    "profile_name": {"by": "label", "value": "Nombre completo", "exact": false}
+  }
+}
