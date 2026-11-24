@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import subprocess
 import tempfile
 import time
@@ -249,6 +250,15 @@ class Ledger:
     def status(self,record):
         return self.data['records'].get(self.key(record),{})
 
+    def pending(self,destination,only_number=None):
+        selected=[r for r in self.selected if only_number is None or r['number']==only_number]
+        require(selected,'El número solicitado no pertenece al lote.')
+        # Solo consulta el avance y la existencia local. No abre ni vuelve a
+        # leer los ZIP completados, ni consulta esos alumnos en el navegador.
+        return [r for r in selected if not (
+            self.status(r).get('done') and self.status(r).get('account')==self.account(r)
+            and (destination/filename(r['name'])).is_file())]
+
     def set(self,record,**values):
         status=self.data['records'].setdefault(self.key(record),{})
         status.update(values)
@@ -426,7 +436,13 @@ def process_student(browser,page,cfg,record,ledger,destination):
             combine(package,final,combined)
             package=combined
         step('validar los seis PDF y guardar el ZIP con el nombre del alumno')
-        inspect_zip(package,record['name'],set(range(6)))
+        try:
+            inspect_zip(package,record['name'],set(range(6)))
+        except StopRun:
+            review=ledger.path.parent/f'revision-{record["number"]}.zip'
+            shutil.copyfile(package,review)
+            print(f'ZIP pendiente de revisión conservado en {review}. No se marcó como completo.')
+            raise
         require(not output.exists(),'Ya apareció un ZIP con ese nombre; no se sobrescribirá.')
         os.link(package,output)  # Publicación completa y exclusiva en el mismo volumen.
         ledger.set(record,done=True,file_hash=file_hash(output),account=ledger.account(record))
@@ -466,13 +482,21 @@ def main():
     records=read_roster(cfg)
     selected=[r for r in records if r['number']>=start]
     require(selected,'No hay alumnos desde el número indicado.')
-    print(f'Inicio: número {start} de A; primer registro en fila {selected[0]["row"]}. Selección: {len(selected)} alumnos.')
     if args.mode=='check':
+        print(f'Inicio configurado: número {start} de A; primer registro en fila {selected[0]["row"]}. Selección: {len(selected)} alumnos.')
         print('Comprobación terminada. No se inició sesión de alumno, emitió ni descargó ningún certificado.')
         return
     from playwright.sync_api import sync_playwright
     destination=Path(cfg['download_directory']).expanduser().resolve()
     with state_lock(STATE),sync_playwright() as p:
+        if args.mode!='inspect':
+            ledger=Ledger(cfg,records,start)
+            selected=ledger.pending(destination,args.only_number)
+            if not selected:
+                print('No quedan alumnos pendientes. No se abrió el navegador.')
+                return
+            selected=selected[:args.limit] if args.limit else selected
+            print(f'Reanudando directamente en el número {selected[0]["number"]}. Pendientes en esta ejecución: {len(selected)}.')
         browser=p.chromium.launch(headless=False)
         admin=browser.new_context(accept_downloads=True)
         try:
@@ -486,11 +510,7 @@ def main():
                 print('Inspector local: selecciona controles sin grabar credenciales. Resume cerrará esta inspección.')
                 page.pause()
                 return
-            ledger=Ledger(cfg,records,start)
             destination.mkdir(parents=True,exist_ok=True)
-            selected=[r for r in ledger.selected if args.only_number is None or r['number']==args.only_number]
-            require(selected,'El número solicitado no pertenece al lote.')
-            selected=selected[:args.limit] if args.limit else selected
             for index,record in enumerate(selected,1):
                 print(f'Procesando número {record["number"]} ({index}/{len(selected)}).')
                 process_student(browser,page,cfg,record,ledger,destination)

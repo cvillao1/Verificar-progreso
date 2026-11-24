@@ -117,6 +117,27 @@ class CertificateTests(unittest.TestCase):
             c.generate_final(browser,{},record(),ledger,self.root/'final.pdf')
         browser.new_context.assert_not_called()
 
+    def test_resume_starts_at_first_pending_without_reading_completed_zip(self):
+        first=record(123)
+        second={**record(210),'name':'OTRA PERSONA EJEMPLO'}
+        ledger=self.ledger([first,second])
+        (self.root/c.filename(first['name'])).write_bytes(b'existing')
+        ledger.set(first,done=True,account=ledger.account(first))
+        with patch.object(c,'file_hash',side_effect=AssertionError('No leer ZIP terminado')):
+            pending=ledger.pending(self.root)
+        self.assertEqual([r['number'] for r in pending],[210])
+
+    def test_missing_completed_zip_is_pending_again(self):
+        ledger=self.ledger()
+        ledger.set(record(),done=True,account=ledger.account(record()))
+        self.assertEqual(len(ledger.pending(self.root)),1)
+
+    def test_finished_selection_is_empty(self):
+        ledger=self.ledger()
+        (self.root/c.filename(NAME)).write_bytes(b'existing')
+        ledger.set(record(),done=True,account=ledger.account(record()))
+        self.assertEqual(ledger.pending(self.root,123),[])
+
     def test_existing_zip_is_not_overwritten_or_queried(self):
         ledger=self.ledger()
         path=self.root/c.filename(NAME)

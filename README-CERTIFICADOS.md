@@ -66,7 +66,9 @@ La búsqueda empieza por el nombre completo tal como aparece en la hoja. Solo si
 
 ## Interrupciones y recuperación
 
-Repite el mismo comando. Los ZIP terminados permanecen guardados y se omiten al continuar. El avance se conserva en `.certificados-state/progreso.json`, con identificadores y huellas, sin correos ni contraseñas. No borres esa carpeta mientras el lote esté pendiente.
+Repite el mismo comando. La ejecución empieza directamente en el primer alumno pendiente: no vuelve a procesar los completados, no abre sus ZIP ni espera entre ellos. Solo comprueba en el avance que siguen completos y que su archivo existe. Si borraste un ZIP, vuelve a quedar pendiente. El avance se conserva en `.certificados-state/progreso.json`, con identificadores y huellas, sin correos ni contraseñas. No borres esa carpeta mientras el lote esté pendiente. Si modificaste manualmente un ZIP completado, debes revisarlo por separado.
+
+Si falla el reconocimiento de los seis PDF, el ZIP sin aprobar se conserva en `.certificados-state/revision-NUMERO.zip` para diagnosticarlo. No se guarda como certificado completo ni se salta al alumno. Estos archivos son privados y están excluidos de Git.
 
 Si ya se pulsó «Obtener Certificado» pero se perdió la conexión, en la siguiente ejecución se vuelve a consultar el administrador. Si hay seis, se descargan; si aún hay cinco, no se repite la emisión automáticamente: revisa la cuenta para evitar duplicados. Una discrepancia de identidad requiere corregir el dato real en la hoja.
 
